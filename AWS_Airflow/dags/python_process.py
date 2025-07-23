@@ -2,7 +2,7 @@ import pendulum
 from airflow.sdk import dag
 from airflow.providers.standard.operators.python import PythonOperator
 @dag(schedule=None, start_date=pendulum.datetime(2025, 1, 1,tz='UTC'), catchup=False)
-def user_processing():
+def python_process():
     def print_hello():
         print("Hello from the print hello!")
     def print_goodbye():
@@ -18,4 +18,4 @@ def user_processing():
     )
     #set Dependencies
     return hello_task >> goodbye_task
-simpledag = user_processing()
+simpledag = python_process()
