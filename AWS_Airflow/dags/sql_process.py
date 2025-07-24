@@ -10,7 +10,7 @@ def create_table():
         task_id="create_table",
         conn_id="postgres",
         sql="""
-        CREATE TABLE IF NOT EXISTS vijay (
+        CREATE TABLE IF NOT EXISTS hammered (
             id INTEGER PRIMARY KEY,
             name VARCHAR(255),
             email VARCHAR(255),
