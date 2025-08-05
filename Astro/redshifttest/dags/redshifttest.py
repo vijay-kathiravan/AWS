@@ -1,35 +1,37 @@
-from datetime import datetime
-
+from datetime import datetime, timedelta
 from airflow import DAG
 from airflow.providers.amazon.aws.operators.redshift_data import RedshiftDataOperator
 
-with DAG(dag_id="redshift", start_date=datetime(2021, 1, 1), schedule=None) as dag:
+default_args = {
+    'owner': 'airflow',
+    'depends_on_past': False,
+    'start_date': datetime(2023, 1, 1),
+    'email_on_failure': False,
+    'email_on_retry': False,
+    'retries': 1,
+    'retry_delay': timedelta(minutes=2),
+}
+
+with DAG('airflow',
+         default_args=default_args,
+         description='DAG for redshift bucket and object operations',
+         schedule="@once",  # Correct parameter name
+         catchup=False
+         ) as dag:
     create_tmp_table_data_api = RedshiftDataOperator(
         task_id="create_tmp_table_data_api",
-        postgres_conn_id="redshift",
-        cluster_identifier='airflow',
+        #region_name="ca-central-1",
+        #cluster_identifier="airflow",
+        workgroup_name="airflow",
         database='dev',
-        db_user='airflow',
-        sql=[
-            """
-            CREATE TEMPORARY TABLE tmp_people (
-        id INTEGER,
-        first_name VARCHAR(100),
-        age INTEGER
-        );
-            """
-        ],
+        # db_user='airflow',
+        sql="""
+            CREATE TABLE tmp_cricket (
+                                       id INTEGER,
+                                       first_name VARCHAR(100),
+                                       age INTEGER
+            );""",
         wait_for_completion=True,
         session_keep_alive_seconds=600,
+        aws_conn_id="aws",
     )
-    create_tmp_table_data_api
-#     insert_data_reuse_session = RedshiftDataOperator(
-#     task_id="insert_data_reuse_session",
-#     sql=[
-#         "INSERT INTO tmp_people VALUES ( 1, 'Bob', 30);",
-#         "INSERT INTO tmp_people VALUES ( 2, 'Alice', 35);",
-#         "INSERT INTO tmp_people VALUES ( 3, 'Charlie', 40);",
-#     ],
-#     wait_for_completion=True,
-#     session_id="{{ task_instance.xcom_pull(task_ids='create_tmp_table_data_api', key='session_id') }}",
-# )
