@@ -102,9 +102,9 @@ def make_delete_crawler_func(crawler_name):
     return delete_crawler_func
 
 with (DAG('spotify',
-         default_args=default_args,
-         schedule=None,
-         catchup=False) as dag):
+          default_args=default_args,
+          schedule=None,
+          catchup=False) as dag):
 
     # Create Bronze S3 Bucket
     create_bronze_bucket = S3CreateBucketOperator(
