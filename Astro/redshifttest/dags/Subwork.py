@@ -9,8 +9,8 @@ import json, io, requests, time, shutil
 
 # #AWS - Airflow Config
 # {
-#     "aws_access_key_id": "AKIATAVAAUPLZX2MEYTY",
-#     "aws_secret_access_key": "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",
+#     "aws_access_key_id": "",
+#     "aws_secret_access_key": "",
 #     "region_name": "ca-central-1"
 # }
 #Requirements folder
