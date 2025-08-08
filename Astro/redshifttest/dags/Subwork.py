@@ -38,6 +38,9 @@ REDSHIFT_WORKGROUP = 'redshiftspotifywg'
 REDSHIFT_DATABASE = 'dev'
 REDSHIFT_SCHEMA = 'redshiftspotifyschema'
 REDSHIFT_TABLE = 'redshiftspotifytable'
+QUICKSIGHT_DATA_SOURCE_ID = 'spotify-redshift-datasource'
+QUICKSIGHT_DATASET_ID = 'spotify-dataset'
+AWS_ACCOUNT_ID = '207567758295'  # Your AWS Account ID
 
 default_args = {
     'owner': 'airflow',
@@ -150,7 +153,8 @@ with (DAG('spotify',
             'ExtendedS3DestinationConfiguration': {
                 'RoleARN': f'arn:aws:iam::{account_id}:role/firehose_delivery_role',
                 'BucketARN': f'arn:aws:s3:::{S3_BUCKET_BRONZE}',
-                'Prefix': S3_PREFIX + 'year=!{timestamp:yyyy}/month=!{timestamp:MM}/day=!{timestamp:dd}/hour=!{timestamp:HH}/',
+                'Prefix': S3_PREFIX,
+                #'Prefix': S3_PREFIX + 'year=!{timestamp:yyyy}/month=!{timestamp:MM}/day=!{timestamp:dd}/hour=!{timestamp:HH}/',
                 'ErrorOutputPrefix': 'errors/',
                 'BufferingHints': {
                     'SizeInMBs': 1,
@@ -506,34 +510,154 @@ with (DAG('spotify',
 
         raise Exception("Data load timed out")
 
-    def delete_redshift_serverless_func():
+
+    # QuickSight Functions
+    def create_quicksight_data_source_func():
+        """Create QuickSight data source connecting to Redshift"""
         aws_hook = AwsBaseHook(aws_conn_id='aws_default', region_name=AWS_REGION)
         session = aws_hook.get_session()
+        quicksight_client = session.client('quicksight')
+
+        # Get Redshift endpoint
         redshift_serverless_client = session.client('redshift-serverless')
+        workgroup_response = redshift_serverless_client.get_workgroup(workgroupName=REDSHIFT_WORKGROUP)
+        redshift_endpoint = workgroup_response['workgroup']['endpoint']['address']
 
-        print(f"Deleting Redshift Serverless workgroup: {REDSHIFT_WORKGROUP}")
-        redshift_serverless_client.delete_workgroup(workgroupName=REDSHIFT_WORKGROUP)
+        data_source_config = {
+            'AwsAccountId': AWS_ACCOUNT_ID,
+            'DataSourceId': QUICKSIGHT_DATA_SOURCE_ID,
+            'Name': 'Spotify Redshift Data Source',
+            'Type': 'REDSHIFT',
+            'DataSourceParameters': {
+                'RedshiftParameters': {
+                    'Host': redshift_endpoint,
+                    'Port': 5439,
+                    'Database': REDSHIFT_DATABASE
+                }
+            },
+            'Credentials': {
+                'CredentialPair': {
+                    'Username': 'admin',
+                    'Password': 'TempPassword123!'
+                }
+            },
+            'Permissions': [
+                {
+                    'Principal': f'arn:aws:quicksight:{AWS_REGION}:{AWS_ACCOUNT_ID}:user/default/cygno-titan',
+                    'Actions': [
+                        'quicksight:DescribeDataSource',
+                        'quicksight:DescribeDataSourcePermissions',
+                        'quicksight:PassDataSource',
+                        'quicksight:UpdateDataSource',
+                        'quicksight:DeleteDataSource',
+                        'quicksight:UpdateDataSourcePermissions'
+                    ]
+                }
+            ],
+            'SslProperties': {'DisableSsl': False}
+        }
 
-        # Wait for workgroup deletion
-        max_wait_time = 600  # 10 minutes
-        wait_interval = 30
-        elapsed_time = 0
+        print(f"Creating QuickSight data source: {QUICKSIGHT_DATA_SOURCE_ID}")
 
-        while elapsed_time < max_wait_time:
-            workgroups = redshift_serverless_client.list_workgroups()
-            workgroup_names = [wg['workgroupName'] for wg in workgroups['workgroups']]
+        response = quicksight_client.create_data_source(**data_source_config)
+        print(f"QuickSight data source created: {response['DataSourceId']}")
+        return {"data_source_id": response['DataSourceId'], "status": "created"}
+    def create_quicksight_dataset_func():
+        """Create QuickSight dataset from Redshift table"""
+        aws_hook = AwsBaseHook(aws_conn_id='aws_default', region_name=AWS_REGION)
+        session = aws_hook.get_session()
+        quicksight_client = session.client('quicksight')
 
-            if REDSHIFT_WORKGROUP not in workgroup_names:
-                print("Workgroup deleted successfully")
-                break
+        dataset_config = {
+            'AwsAccountId': AWS_ACCOUNT_ID,
+            'DataSetId': QUICKSIGHT_DATASET_ID,
+            'Name': 'Spotify Dataset',
+            'PhysicalTableMap': {
+                'spotifytable': {
+                    'RelationalTable': {
+                        'DataSourceArn': f'arn:aws:quicksight:{AWS_REGION}:{AWS_ACCOUNT_ID}:datasource/{QUICKSIGHT_DATA_SOURCE_ID}',
+                        'Schema': REDSHIFT_SCHEMA,
+                        'Name': REDSHIFT_TABLE,
+                        'InputColumns': [
+                            {'Name': 'artists', 'Type': 'STRING'},
+                            {'Name': 'album_name', 'Type': 'STRING'},
+                            {'Name': 'track_name', 'Type': 'STRING'},
+                            {'Name': 'popularity', 'Type': 'INTEGER'},
+                            {'Name': 'duration_ms', 'Type': 'INTEGER'},
+                            {'Name': 'track_genre', 'Type': 'STRING'}
+                        ]
+                    }
+                }
+            },
+            'ImportMode': 'DIRECT_QUERY',
+            'Permissions': [
+                {
+                    'Principal': f'arn:aws:quicksight:{AWS_REGION}:{AWS_ACCOUNT_ID}:user/default/cygno-titan',
+                    'Actions': [
+                        'quicksight:DescribeDataSet',
+                        'quicksight:DescribeDataSetPermissions',
+                        'quicksight:PassDataSet',
+                        'quicksight:DescribeIngestion',
+                        'quicksight:ListIngestions',
+                        'quicksight:UpdateDataSet',
+                        'quicksight:DeleteDataSet',
+                        'quicksight:CreateIngestion',
+                        'quicksight:CancelIngestion',
+                        'quicksight:UpdateDataSetPermissions'
+                    ]
+                }
+            ]
+        }
 
-            time.sleep(wait_interval)
-            elapsed_time += wait_interval
+        print(f"Creating QuickSight dataset: {QUICKSIGHT_DATASET_ID}")
 
-        print(f"Deleting Redshift Serverless namespace: {REDSHIFT_NAMESPACE}")
-        redshift_serverless_client.delete_namespace(namespaceName=REDSHIFT_NAMESPACE)
+        try:
+            # Check if dataset already exists
+            quicksight_client.describe_data_set(
+                AwsAccountId=AWS_ACCOUNT_ID,
+                DataSetId=QUICKSIGHT_DATASET_ID
+            )
+            print("Dataset already exists, deleting first")
+            quicksight_client.delete_data_set(
+                AwsAccountId=AWS_ACCOUNT_ID,
+                DataSetId=QUICKSIGHT_DATASET_ID
+            )
+            time.sleep(10)
+        except quicksight_client.exceptions.ResourceNotFoundException:
+            print("Dataset doesn't exist, creating new one")
 
-        print("Redshift Serverless resources deleted successfully")
+        response = quicksight_client.create_data_set(**dataset_config)
+        print(f"QuickSight dataset created: {response['DataSetId']}")
+        return {"dataset_id": response['DataSetId'], "status": "created"}
+
+    # def delete_redshift_serverless_func():
+    #     aws_hook = AwsBaseHook(aws_conn_id='aws_default', region_name=AWS_REGION)
+    #     session = aws_hook.get_session()
+    #     redshift_serverless_client = session.client('redshift-serverless')
+    #
+    #     print(f"Deleting Redshift Serverless workgroup: {REDSHIFT_WORKGROUP}")
+    #     redshift_serverless_client.delete_workgroup(workgroupName=REDSHIFT_WORKGROUP)
+    #
+    #     # Wait for workgroup deletion
+    #     max_wait_time = 600  # 10 minutes
+    #     wait_interval = 30
+    #     elapsed_time = 0
+    #
+    #     while elapsed_time < max_wait_time:
+    #         workgroups = redshift_serverless_client.list_workgroups()
+    #         workgroup_names = [wg['workgroupName'] for wg in workgroups['workgroups']]
+    #
+    #         if REDSHIFT_WORKGROUP not in workgroup_names:
+    #             print("Workgroup deleted successfully")
+    #             break
+    #
+    #         time.sleep(wait_interval)
+    #         elapsed_time += wait_interval
+    #
+    #     print(f"Deleting Redshift Serverless namespace: {REDSHIFT_NAMESPACE}")
+    #     redshift_serverless_client.delete_namespace(namespaceName=REDSHIFT_NAMESPACE)
+    #
+    #     print("Redshift Serverless resources deleted successfully")
     # Upload Glue Script
     upload_glue_script = S3CreateObjectOperator(
         task_id='upload_glue_script',
@@ -703,9 +827,18 @@ job.commit()
         task_id='load_data_to_redshift',
         python_callable=load_data_to_redshift_func,
     )
-    delete_redshift_serverless = PythonOperator(
-        task_id='delete_redshift_serverless',
-        python_callable=delete_redshift_serverless_func,
+    create_quicksight_data_source = PythonOperator(
+        task_id='create_quicksight_data_source',
+        python_callable=create_quicksight_data_source_func,
     )
+
+    create_quicksight_dataset = PythonOperator(
+        task_id='create_quicksight_dataset',
+        python_callable=create_quicksight_dataset_func,
+    )
+    # delete_redshift_serverless = PythonOperator(
+    #     task_id='delete_redshift_serverless',
+    #     python_callable=delete_redshift_serverless_func,
+    # )
     # Task Dependencies
-    create_bronze_bucket >> create_kinesis_resources >> stream_localhost_data >> delete_kinesis_resources >> create_bronze_crawler >> create_silver_bucket >> delete_crawler >> upload_glue_script >> create_glue_job >> run_glue_job >> create_gold_bucket >> delete_glue_job >> create_silver_crawler >> delete_crawler_silver >> athena_query >> create_redshift_serverless_func >> create_redshift_schema >> create_redshift_table >> load_data_to_redshift >> delete_redshift_serverless
+    create_bronze_bucket >> create_kinesis_resources >> stream_localhost_data >> delete_kinesis_resources >> create_bronze_crawler >> create_silver_bucket >> delete_crawler >> upload_glue_script >> create_glue_job >> run_glue_job >> create_gold_bucket >> delete_glue_job >> create_silver_crawler >> delete_crawler_silver >> athena_query >> create_redshift_serverless_func >> create_redshift_schema >> create_redshift_table >> load_data_to_redshift >> create_quicksight_data_source >> create_quicksight_dataset
